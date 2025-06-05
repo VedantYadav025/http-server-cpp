@@ -60,6 +60,9 @@ int main(int argc, char **argv) {
          (socklen_t *)&client_addr_len);
   std::cout << "Client connected\n";
 
+  const char *response = "HTTP/1.1 200 OK\r\n";
+  send(server_fd, response, strlen(response), 0);
+
   close(server_fd);
 
   return 0;
