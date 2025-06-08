@@ -84,6 +84,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 4096; i++) {
     if (buffer[i] == '/') {
       is_ok = (buffer[i + 1] == ' ');
+      break;
     }
   }
 
@@ -96,7 +97,5 @@ int main(int argc, char **argv) {
 
   send(client_fd, response, strlen(response), 0);
 
-  close(client_fd);
-  close(server_fd);
   return 0;
 }
