@@ -3,9 +3,44 @@
 #include <cstring>
 #include <iostream>
 #include <netdb.h>
+#include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+std::string getResponse(const char* request) {
+  std::string str_request(request); // working correctly
+  std::string echo;
+  std::string response;
+
+  // find if echo/ is present in the request
+  int index_of_echo = str_request.find("echo");
+
+  if (index_of_echo == std::string::npos) {
+
+    int index_of_slash = str_request.find("/");
+    if (str_request[index_of_slash + 1] == ' ') {
+      return "HTTP/1.1 200 OK\r\n\r\n";
+    }
+
+    response = "HTTP/1.1 404 Not Found\r\n\r\n";
+    return response;
+  }
+
+  index_of_echo += 5;
+
+  int i = index_of_echo;
+  while (str_request[i] != ' ') {
+    echo.push_back(str_request[i]);
+    i++;
+  }
+  response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ";
+  response += std::to_string(echo.size()) + "\r\n\r\n" + echo;
+  // std::cout << echo << std::endl;
+
+  return response;
+}
+
 
 int main(int argc, char **argv) {
   // Flush after every std::cout / std::cerr
@@ -63,39 +98,21 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  std::cout << "Client connected\n";
-
-  // const char *response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
-  // send(client_fd, response, strlen(response), 0);
+  std::cout << "Client connected" << std::endl;
 
   char buffer[4096];
-  memset(buffer, 0, sizeof(buffer));
+  ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer), 0);
 
-  ssize_t bytes_received = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+  // memset(buffer, 0, sizeof(buffer));
 
-  if (bytes_received < 0) {
-    std::cerr << "Failed to receive data from client\n";
-    close(client_fd);
-    return 1;
-  }
+  std::string response = getResponse(buffer);
 
-  bool is_ok;
+  std::cout << "response sent is " << response << std::endl;
 
-  for (int i = 0; i < 4096; i++) {
-    if (buffer[i] == '/') {
-      is_ok = (buffer[i + 1] == ' ');
-      break;
-    }
-  }
+  send(client_fd, response.data(), strlen(response.data()), 0);
 
-  const char* response;
-
-  if (is_ok) 
-    response = "HTTP/1.1 200 OK\r\n\r\n";
-  else
-    response = "HTTP/1.1 404 Not Found\r\n\r\n";
-
-  send(client_fd, response, strlen(response), 0);
+  close(client_fd);
+  close(server_fd);
 
   return 0;
 }
