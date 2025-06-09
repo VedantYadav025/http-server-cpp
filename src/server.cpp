@@ -6,7 +6,10 @@
 #include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <thread>
+#include <type_traits>
 #include <unistd.h>
+
 
 std::string getResponse(const char *request) {
   std::string str_request(request); // working correctly
@@ -63,6 +66,16 @@ std::string getResponseForUserAgent(const char *request) {
   return response;
 }
 
+void respondToRequest(int client_fd) {
+  char buffer[4096];
+  if (recv(client_fd, buffer, sizeof(buffer), 0) == -1)  {
+    std::cout << "Failed to read data\n";
+    return;
+  }
+  std::string response = getResponseForUserAgent(buffer);
+  send(client_fd, response.c_str(), response.size(), 0);
+}
+
 int main(int argc, char **argv) {
   // Flush after every std::cout / std::cerr
   std::cout << std::unitbuf;
@@ -106,33 +119,33 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  struct sockaddr_in client_addr;
-  int client_addr_len = sizeof(client_addr);
-
   std::cout << "Waiting for a client to connect...\n";
 
-  int client_fd = accept(server_fd, (struct sockaddr *)&client_addr,
-                         (socklen_t *)&client_addr_len);
+  // ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer), 0);
 
-  if (client_fd < 0) {
-    std::cerr << "Failed to connect to client\n";
-    return 1;
+  // // memset(buffer, 0, sizeof(buffer));
+
+  // std::string response = getResponseForUserAgent(buffer);
+
+  // std::cout << "response sent is " << response << std::endl;
+
+  // send(client_fd, response.data(), strlen(response.data()), 0);
+
+  while (true) {
+
+    struct sockaddr_in client_addr;
+    int client_addr_len = sizeof(client_addr);
+    int client_fd = accept(server_fd, (struct sockaddr *)&client_addr,
+                           (socklen_t *)&client_addr_len);
+
+    if (client_fd < 0) {
+      std::cout << "Failed to connect to client\n";
+      continue;
+    }
+    std::cout << "Client connected\n";
+    std::thread(respondToRequest, client_fd).detach();
   }
 
-  std::cout << "Client connected" << std::endl;
-
-  char buffer[4096];
-  ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer), 0);
-
-  // memset(buffer, 0, sizeof(buffer));
-
-  std::string response = getResponseForUserAgent(buffer);
-
-  std::cout << "response sent is " << response << std::endl;
-
-  send(client_fd, response.data(), strlen(response.data()), 0);
-
-  close(client_fd);
   close(server_fd);
 
   return 0;
