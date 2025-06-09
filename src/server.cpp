@@ -8,7 +8,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-std::string getResponse(const char* request) {
+std::string getResponse(const char *request) {
   std::string str_request(request); // working correctly
   std::string echo;
   std::string response;
@@ -41,6 +41,27 @@ std::string getResponse(const char* request) {
   return response;
 }
 
+std::string getResponseForUserAgent(const char *request) {
+  std::string str_request(request);
+  int index_of_usr_agent = str_request.find("User-Agent");
+
+  if (index_of_usr_agent == std::string::npos)
+    return getResponse(request);
+
+  index_of_usr_agent += 12;
+  std::string usr_agent_response;
+  int i = index_of_usr_agent;
+  while (str_request[i] != '\r') {
+    usr_agent_response.push_back(str_request[i]);
+    i++;
+  }
+  std::string response =
+      "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " +
+      std::to_string(usr_agent_response.size()) + "\r\n\r\n" +
+      usr_agent_response;
+
+  return response;
+}
 
 int main(int argc, char **argv) {
   // Flush after every std::cout / std::cerr
@@ -105,7 +126,7 @@ int main(int argc, char **argv) {
 
   // memset(buffer, 0, sizeof(buffer));
 
-  std::string response = getResponse(buffer);
+  std::string response = getResponseForUserAgent(buffer);
 
   std::cout << "response sent is " << response << std::endl;
 
