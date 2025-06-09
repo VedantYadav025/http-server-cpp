@@ -1,9 +1,11 @@
 #include <arpa/inet.h>
-#include <cstdint>
-#include <filesystem>
+#include <bits/types/FILE.h>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <sys/stat.h>
 #include <ios>
 #include <iostream>
 #include <netdb.h>
@@ -12,34 +14,35 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <thread>
-#include <fstream>
 #include <type_traits>
 #include <unistd.h>
 
-
 #include <sstream>
 
-std::string getResponse(const std::string& request) {
+std::string getResponse(const std::string &request) {
   if (request.empty()) {
     return "HTTP/1.1 400 Bad Request\r\n\r\n";
   }
 
   size_t method_end = request.find(' ');
-  if (method_end == std::string::npos) return "HTTP/1.1 400 Bad Request\r\n\r\n";
+  if (method_end == std::string::npos)
+    return "HTTP/1.1 400 Bad Request\r\n\r\n";
 
   size_t path_end = request.find(' ', method_end + 1);
-  if (path_end == std::string::npos) return "HTTP/1.1 400 Bad Request\r\n\r\n";
+  if (path_end == std::string::npos)
+    return "HTTP/1.1 400 Bad Request\r\n\r\n";
 
   std::string path = request.substr(method_end + 1, path_end - method_end - 1);
 
   std::istringstream stream(request);
   std::string line;
-  std::getline(stream, line);  // Skip request line
+  std::getline(stream, line); // Skip request line
 
   std::string user_agent;
 
   while (std::getline(stream, line) && line != "\r" && !line.empty()) {
-    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
 
     const std::string ua_header = "User-Agent: ";
     if (line.compare(0, ua_header.size(), ua_header) == 0) {
@@ -52,12 +55,13 @@ std::string getResponse(const std::string& request) {
   }
 
   if (path == "/user-agent") {
-    std::string body = user_agent.empty() ? "User-Agent header not found" : user_agent;
+    std::string body =
+        user_agent.empty() ? "User-Agent header not found" : user_agent;
 
-    std::string headers =
-      "HTTP/1.1 200 OK\r\n"
-      "Content-Type: text/plain\r\n"
-      "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+    std::string headers = "HTTP/1.1 200 OK\r\n"
+                          "Content-Type: text/plain\r\n"
+                          "Content-Length: " +
+                          std::to_string(body.size()) + "\r\n\r\n";
 
     return headers + body;
   }
@@ -69,20 +73,19 @@ std::string getResponse(const std::string& request) {
     if (!user_agent.empty()) {
       body += "\nUser-Agent: " + user_agent;
     }
-    std::string headers =
-      "HTTP/1.1 200 OK\r\n"
-      "Content-Type: text/plain\r\n"
-      "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+    std::string headers = "HTTP/1.1 200 OK\r\n"
+                          "Content-Type: text/plain\r\n"
+                          "Content-Length: " +
+                          std::to_string(body.size()) + "\r\n\r\n";
     return headers + body;
   }
 
   return "HTTP/1.1 404 Not Found\r\n\r\n";
 }
 
-
 void respondToRequest(int client_fd) {
   char buffer[4096];
-  if (recv(client_fd, buffer, sizeof(buffer) - 1, 0) == -1)  {
+  if (recv(client_fd, buffer, sizeof(buffer) - 1, 0) == -1) {
     std::cout << "Failed to read data\n";
     close(client_fd);
     return;
@@ -93,65 +96,90 @@ void respondToRequest(int client_fd) {
   std::cout << "Client disconnected\n";
 }
 
-void handleFile(int client_fd, std::string directory) {
-  char buffer[4096];
-  if (recv(client_fd, buffer, sizeof(buffer) - 1, 0) == -1)  {
+std::string getBody(const std::string &request) {
+  const std::string delimiter = "\r\n\r\n";
+  size_t pos = request.find(delimiter);
+  if (pos == std::string::npos) {
+    // No body present
+    return "";
+  }
+  return request.substr(pos + delimiter.length());
+}
+
+std::string getRequestedFileName(const std::string &request) {
+  // Find the request path
+  size_t method_end = request.find(' ');
+  if (method_end == std::string::npos)
+    return "";
+
+  size_t path_end = request.find(' ', method_end + 1);
+  if (path_end == std::string::npos)
+    return "";
+
+  std::string path = request.substr(method_end + 1, path_end - method_end - 1);
+
+  const std::string prefix = "/files/";
+  if (path.rfind(prefix, 0) != 0)
+    return "";
+
+  return path.substr(prefix.size()); // Extract filename from path
+}
+
+std::string getHandle(int client_fd, std::string directory, const char* request) {
+
+  if (std::string(request).find("files") == std::string::npos) {
+    return getResponse(std::string(request));
+  }
+
+  std::string file_path = directory + getRequestedFileName(request);
+  std::cout << "File path is " << file_path << std::endl;
+  FILE* fptr = fopen(file_path.c_str(), "r");
+  if (fptr == NULL) {
+    return "HTTP/1.1 404 Not Found\r\n\r\n";
+  }
+
+  char myString[4000];
+  fgets(myString, 4000, fptr);
+  std::string s(myString);
+
+  std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ";
+  response += std::to_string(s.size());
+  response += "\r\n\r\n";
+  response += myString;
+
+  return response;
+}
+
+void handleFilePost(int client_fd, std::string directory) {
+	char buffer[4096];
+  if (recv(client_fd, buffer, sizeof(buffer) - 1, 0) < 0) {
     std::cout << "Failed to read data\n";
     close(client_fd);
     return;
   }
 
-  std::string buffer_str(buffer);
-
-  int index_of_file = buffer_str.find("files/");
-
-  if (index_of_file == std::string::npos) {
-    std::string response = getResponse(buffer_str);
+  if (buffer[0] == 'G') {
+    std::cout << "here\n";
+    std::string response = getHandle(client_fd, directory, buffer);
     send(client_fd, response.c_str(), response.size(), 0);
-    close(client_fd);
     return;
   }
 
-  index_of_file += strlen("files/");
-  std::string file_name;
+  std::cout << "here\n";
 
-  int i = index_of_file;
-  
-  while (buffer_str[i] != ' ') {
-    file_name.push_back(buffer_str[i]);
-    i++;
-  }
-
-  std::string response;
+  std::cout << directory << std::endl;
+  std::string body = getBody(std::string(buffer));
+  std::string file_name = getRequestedFileName(std::string(buffer));
 
 
-  std::filesystem::path full_path = directory + "/" + file_name;
- 
-  std::cout << "Full Path is " <<  full_path << std::endl;
+  std::string file_path = directory + "/" + file_name;
 
+  FILE* fptr = fopen(file_path.c_str(), "w");
+  fprintf(fptr, body.c_str());
+  fclose(fptr);
 
-
-  if (std::filesystem::exists(full_path)) {
-    FILE* fptr;
-    fptr = fopen(full_path.c_str(), "r");
-    char myString[100] = {0};
-    fgets(myString, 100, fptr);
-
-    fseek(fptr, 0, SEEK_END);
-    int size = ftell(fptr);
-    fclose(fptr);
-
-    response += "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ";
-    response += std::to_string(size);
-    response += "\r\n\r\n";
-    response += std::string(myString);
-  }
-  else {
-    response = "HTTP/1.1 404 Not Found\r\n\r\n";
-  }
-
+  std::string response = "HTTP/1.1 201 Created\r\n\r\n";
   send(client_fd, response.c_str(), response.size(), 0);
-
 }
 
 int main(int argc, char **argv) {
@@ -230,7 +258,7 @@ int main(int argc, char **argv) {
       continue;
     }
     std::cout << "Client connected\n";
-    std::thread(handleFile, client_fd, directory).detach();
+    std::thread(handleFilePost, client_fd, directory).detach();
   }
 
   close(server_fd);
