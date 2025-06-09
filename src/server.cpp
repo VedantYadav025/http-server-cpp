@@ -1,85 +1,172 @@
 #include <arpa/inet.h>
+#include <cstdint>
+#include <filesystem>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ios>
 #include <iostream>
 #include <netdb.h>
+#include <sstream>
 #include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <thread>
+#include <fstream>
 #include <type_traits>
 #include <unistd.h>
 
 
-std::string getResponse(const char *request) {
-  std::string str_request(request); // working correctly
-  std::string echo;
-  std::string response;
+#include <sstream>
 
-  // find if echo/ is present in the request
-  int index_of_echo = str_request.find("echo");
+std::string getResponse(const std::string& request) {
+  if (request.empty()) {
+    return "HTTP/1.1 400 Bad Request\r\n\r\n";
+  }
 
-  if (index_of_echo == std::string::npos) {
+  size_t method_end = request.find(' ');
+  if (method_end == std::string::npos) return "HTTP/1.1 400 Bad Request\r\n\r\n";
 
-    int index_of_slash = str_request.find("/");
-    if (str_request[index_of_slash + 1] == ' ') {
-      return "HTTP/1.1 200 OK\r\n\r\n";
+  size_t path_end = request.find(' ', method_end + 1);
+  if (path_end == std::string::npos) return "HTTP/1.1 400 Bad Request\r\n\r\n";
+
+  std::string path = request.substr(method_end + 1, path_end - method_end - 1);
+
+  std::istringstream stream(request);
+  std::string line;
+  std::getline(stream, line);  // Skip request line
+
+  std::string user_agent;
+
+  while (std::getline(stream, line) && line != "\r" && !line.empty()) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+
+    const std::string ua_header = "User-Agent: ";
+    if (line.compare(0, ua_header.size(), ua_header) == 0) {
+      user_agent = line.substr(ua_header.size());
     }
-
-    response = "HTTP/1.1 404 Not Found\r\n\r\n";
-    return response;
   }
 
-  index_of_echo += 5;
-
-  int i = index_of_echo;
-  while (str_request[i] != ' ') {
-    echo.push_back(str_request[i]);
-    i++;
+  if (path == "/") {
+    return "HTTP/1.1 200 OK\r\n\r\n";
   }
-  response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ";
-  response += std::to_string(echo.size()) + "\r\n\r\n" + echo;
-  // std::cout << echo << std::endl;
 
-  return response;
+  if (path == "/user-agent") {
+    std::string body = user_agent.empty() ? "User-Agent header not found" : user_agent;
+
+    std::string headers =
+      "HTTP/1.1 200 OK\r\n"
+      "Content-Type: text/plain\r\n"
+      "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+
+    return headers + body;
+  }
+
+  const std::string echo_prefix = "/echo/";
+  if (path.rfind(echo_prefix, 0) == 0) {
+    std::string to_echo = path.substr(echo_prefix.length());
+    std::string body = to_echo;
+    if (!user_agent.empty()) {
+      body += "\nUser-Agent: " + user_agent;
+    }
+    std::string headers =
+      "HTTP/1.1 200 OK\r\n"
+      "Content-Type: text/plain\r\n"
+      "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+    return headers + body;
+  }
+
+  return "HTTP/1.1 404 Not Found\r\n\r\n";
 }
 
-std::string getResponseForUserAgent(const char *request) {
-  std::string str_request(request);
-  int index_of_usr_agent = str_request.find("User-Agent");
-
-  if (index_of_usr_agent == std::string::npos)
-    return getResponse(request);
-
-  index_of_usr_agent += 12;
-  std::string usr_agent_response;
-  int i = index_of_usr_agent;
-  while (str_request[i] != '\r') {
-    usr_agent_response.push_back(str_request[i]);
-    i++;
-  }
-  std::string response =
-      "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " +
-      std::to_string(usr_agent_response.size()) + "\r\n\r\n" +
-      usr_agent_response;
-
-  return response;
-}
 
 void respondToRequest(int client_fd) {
   char buffer[4096];
-  if (recv(client_fd, buffer, sizeof(buffer), 0) == -1)  {
+  if (recv(client_fd, buffer, sizeof(buffer) - 1, 0) == -1)  {
     std::cout << "Failed to read data\n";
+    close(client_fd);
     return;
   }
-  std::string response = getResponseForUserAgent(buffer);
+  std::string response = getResponse(std::string(buffer));
   send(client_fd, response.c_str(), response.size(), 0);
+  close(client_fd);
+  std::cout << "Client disconnected\n";
+}
+
+void handleFile(int client_fd, std::string directory) {
+  char buffer[4096];
+  if (recv(client_fd, buffer, sizeof(buffer) - 1, 0) == -1)  {
+    std::cout << "Failed to read data\n";
+    close(client_fd);
+    return;
+  }
+
+  std::string buffer_str(buffer);
+
+  int index_of_file = buffer_str.find("files/");
+
+  if (index_of_file == std::string::npos) {
+    std::string response = getResponse(buffer_str);
+    send(client_fd, response.c_str(), response.size(), 0);
+    close(client_fd);
+    return;
+  }
+
+  index_of_file += strlen("files/");
+  std::string file_name;
+
+  int i = index_of_file;
+  
+  while (buffer_str[i] != ' ') {
+    file_name.push_back(buffer_str[i]);
+    i++;
+  }
+
+  std::string response;
+
+
+  std::filesystem::path full_path = directory + "/" + file_name;
+ 
+  std::cout << "Full Path is " <<  full_path << std::endl;
+
+
+
+  if (std::filesystem::exists(full_path)) {
+    FILE* fptr;
+    fptr = fopen(full_path.c_str(), "r");
+    char myString[100] = {0};
+    fgets(myString, 100, fptr);
+
+    fseek(fptr, 0, SEEK_END);
+    int size = ftell(fptr);
+    fclose(fptr);
+
+    response += "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ";
+    response += std::to_string(size);
+    response += "\r\n\r\n";
+    response += std::string(myString);
+  }
+  else {
+    response = "HTTP/1.1 404 Not Found\r\n\r\n";
+  }
+
+  send(client_fd, response.c_str(), response.size(), 0);
+
 }
 
 int main(int argc, char **argv) {
   // Flush after every std::cout / std::cerr
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
+
+  std::string directory;
+
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--directory" && i + 1 < argc) {
+      directory = argv[i + 1];
+    }
+  }
 
   // You can use print statements as follows for debugging, they'll be visible
   // when running tests.
@@ -143,7 +230,7 @@ int main(int argc, char **argv) {
       continue;
     }
     std::cout << "Client connected\n";
-    std::thread(respondToRequest, client_fd).detach();
+    std::thread(handleFile, client_fd, directory).detach();
   }
 
   close(server_fd);
